@@ -1,0 +1,148 @@
+# This Makefile contains macOS specifics.
+# It is included in the main Makefile -- do not execute it directly.
+
+PYTHON=python
+
+BASE_DIR=$(shell pwd)/dist/windows
+STG_DIR="$(BASE_DIR)/staging"
+BUILD_DIR="$(BASE_DIR)/build"
+INNO_LOCATIONS=iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+
+# Inno Setup CLI
+ISCC:=$(shell etc/find-exe $(INNO_LOCATIONS))
+
+# Files / directories required for input to the build
+SRC=pyproject.toml requirements.txt src
+
+# ------------------------------------------------------------------------------
+help:
+	@echo
+	@$E What do you want to make?  Available targets are:
+	@echo
+	@$E "$HGetting started$_"
+	@$E "   init*:     Initialise / update the project (create venv etc.). Idempotent."
+	@$E "   preflight: Check that prequisites are installed ok."
+	@$E "   help:      Print this help text."
+	@echo
+	@$E "$HBuild / install targets$_"
+	@$E "   build*:    Build the Windows app."
+	@$E "   installer: Build the installer. Does NOT automatically do a build."
+	@$E "   app*:      build + installer.  $I<---- USE THIS TO BUILD FOR DISTRIBUTION$_"
+	@echo
+	@$E "$HMiscellaneous targets$_"
+	@$E "   clean:     Remove Windows generated components."
+	@$E "   clobber:   Remove all generated components."
+	@echo
+	@$E " Targets marked with * accept a \"jinlava=...tar.gz\" option to specify that the"
+	@$E " jinlava package should be installed from the specified file instead of PyPI."
+	@echo
+
+# ------------------------------------------------------------------------------
+# Setup the virtual environment. This is a cutdown version of the Mac one as we
+# don't need to support dev work on DOS, just enough to do build and `flet run`.
+_venv:	_venv_is_off 
+	@if [ ! -d venv ] ; \
+	then \
+		echo Creating virtualenv ; \
+		$(PYTHON) -m venv venv ; \
+	fi
+	@( \
+		set -e ; \
+		echo Temporarily activating venv ; \
+		source venv/Scripts/activate ; \
+		echo Installing requirements ; \
+		$(PYTHON) -m pip install 'pip>=20.3' --upgrade ; \
+		if [ "$(jinlava)" == "" ] ; \
+		then \
+			$(PYTHON) -m pip install -r requirements.txt --upgrade ; \
+		else \
+			req=$$(mktemp) ; \
+			z=1 ; \
+			trap '/bin/rm -f "$$req"; exit $$z' 0 ; \
+			sed -e 's/^jinlava/# jinlava/' requirements.txt > "$$req" ; \
+			$(PYTHON) -m pip install -r "$$req" --upgrade ; \
+			$(PYTHON) -m pip install "$(jinlava)" --upgrade ; \
+			z=0 ; \
+		fi ; \
+	)
+
+# ------------------------------------------------------------------------------
+preflight: _venv_is_on _check_src _check_flutter _check_flet _check_inno _check_powershell
+
+_check_powershell:
+	@echo -n "Checking powershell ... "
+	@( \
+		etc/find-exe powershell > /dev/null && echo ok && exit 0 ; \
+		echo " not found" ; \
+		exit 1 ; \
+	)
+
+_check_inno:
+	@echo -n "Checking Inno Setup ... "
+	@( \
+		[ "$(ISCC)" != "" ] && echo "found $(ISCC)" && exit 0 ; \
+		echo " not found" ; \
+		exit 1 ; \
+	)
+
+_check_src:
+	@echo -n "Checking source ... "
+	@( \
+		for f in $(SRC) ; \
+		do \
+			[ ! -e "$$f" ] && echo "$$f is missing" && exit 1 ; \
+		done ; \
+		echo ok ; \
+		exit 0 ; \
+	)
+
+# ------------------------------------------------------------------------------
+app:	build installer
+
+# Windows build barfs on symlinks so we need a copy of source without them.
+# The staging area is retained at the end of the build for debugging etc.
+# Note that deleting the old staging area is as slow as on EC2 with DOS so we
+# move it aside and delete in the background.
+_stg:
+	@echo -n "Creating staging copy ... "
+	@( \
+		set -e ; \
+		[ -e "$(STG_DIR)" ] && mv "$(STG_DIR)" "$(STG_DIR).$$$$" ; \
+		/bin/rm -rf "$(STG_DIR).$$$$" & \
+		mkdir -p "$(STG_DIR)" "$(BUILD_DIR)" ; \
+		for f in $(SRC) ; \
+		do \
+			cp -RL "$$f" "$(STG_DIR)" ; \
+		done ; \
+		echo done; \
+	)
+ifneq ($(jinlava),)
+	@echo "Installing jinlava from $(jinlava) ... "
+	@( \
+		set -e ; \
+		$(PYTHON) -m pip install --target "$(STG_DIR)/src" "$(jinlava)" ; \
+		sed -ie "s/^jinlava/# jinlava/" "$(STG_DIR)/requirements.txt" ; \
+	)
+endif
+
+_build: _venv_is_on
+	powershell flet build windows "$(STG_DIR)" \
+	--cleanup-app \
+	--compile-app \
+	--compile-packages \
+	--output "$(BUILD_DIR)"
+
+build:	_stg _build
+
+ifneq ($(ISCC),)
+installer:
+	@echo "Building installer ... "
+	"$(ISCC)" -DVersion="$(VERSION)" -DBaseDir="$(BASE_DIR)" etc/lavagui.iss
+else
+installer:
+	$(error No Inno Setup CLI found)
+endif
+
+# ------------------------------------------------------------------------------
+clean:
+	$(RM) -r $(BASE_DIR)

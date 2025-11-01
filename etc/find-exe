@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Look for a given executable in a list of places.
+
+for path in "$@"
+do
+	"$path" < /dev/null > /dev/null 2>&1
+
+	[ $? -ne 127 ] && echo "$path" && exit 0
+done
+exit 1

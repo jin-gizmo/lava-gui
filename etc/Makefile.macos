@@ -1,0 +1,156 @@
+# This Makefile contains macOS specifics.
+# It is included in the main Makefile -- do not execute it directly.
+
+PYTHON=python3
+
+BASE_DIR=dist/macos
+BUNDLED_DOCS_MD=$(wildcard doc/[A-Z]*.md)
+# These are the HTML versions we put in the DMG and S3 as part of a deployment.
+BUNDLED_DOCS_HTML=$(patsubst %.md,dist/%.html,$(BUNDLED_DOCS_MD))
+
+ifneq ($(origin GEM_HOME),environment)
+export GEM_HOME:=$(HOME)/.gem
+endif
+export PATH:=$(GEM_HOME)/bin:$(PATH)
+
+
+# ------------------------------------------------------------------------------
+help:
+	@echo
+	@$E What do you want to make?  Available targets are:
+	@echo
+	@$E "$HGetting started$_"
+	@$E "   init:      Initialise / update the project (create venv etc.). Idempotent."
+	@$E "   preflight: Check that prequisites are installed ok."
+	@$E "   help:      Print this help text."
+	@echo
+	@$E "$HBuild / install targets$_"
+	@$E "   build:     Build the macOS app."
+	@$E "   app:       build + strip + dmg.  $I<---- USE THIS TO BUILD FOR DISTRIBUTION$_"
+	@$E "   dmg:       Make A DMG distribution."
+	@$E "   doc:       Generate HTML versions of the docs distribute with the DMG."
+	@$E "   strip:     Strip x86 components out of the macOS universal binary."
+	@echo
+	@$E "$HMiscellaneous targets$_"
+	@$E "   black      Format the code using black."
+	@$E "   check:     Run some code checks (flake8 etc)."
+	@$E "   clean:     Remove macOS generated components, fluff etc."
+	@$E "   clobber:   Remove all generated components."
+	@echo
+
+
+# ------------------------------------------------------------------------------
+# Setup the virtual environment
+_venv:	_venv_is_off 
+	@if [ ! -d venv ] ; \
+	then \
+		echo Creating virtualenv ; \
+		$(PYTHON) -m venv venv ; \
+	fi
+	@( \
+		echo Temporarily activating venv ; \
+		source venv/bin/activate ; \
+		echo Installing requirements ; \
+		$(PYTHON) -m pip install 'pip>=20.3' --upgrade ; \
+		$(PYTHON) -m pip install -r requirements.txt --upgrade ; \
+		$(PYTHON) -m pip install -r requirements-build.txt --upgrade ; \
+		: ; \
+	)
+
+
+# ------------------------------------------------------------------------------
+preflight: _venv_is_on _check_ruby _check_pod _check_flutter _check_flet
+
+_check_ruby:
+	@( \
+		echo -n "Checking ruby ... " ; \
+		rubypath=$$(which ruby 2>/dev/null) ; \
+		[ $$? -ne 0 ] && echo "not found" && exit 1 ; \
+		[ "$$rubypath" = "/usr/bin/ruby" ] && echo -n "macOS system ruby ... " ; \
+		echo -n "version " ; \
+		ruby --version ; \
+	)
+
+_check_pod:
+	@( \
+		echo -n "Checking CocoaPods ... " ; \
+		podver=$$(pod --version 2>/dev/null) ; \
+		case $$? \
+		in \
+			127)	echo "not found" && exit 1 ;; \
+			0)	echo "version $$podver" ;; \
+			*)	echo "found but not working -- try running \"pod --version\"" ;; \
+		esac ; \
+	)
+
+# ------------------------------------------------------------------------------
+app:	build strip dmg
+
+build:	_venv_is_on
+	$(RM) -r "$(BASE_DIR)/$(APP).app"
+	flet build macos --cleanup-app --output "$(BASE_DIR)"
+
+strip:	$(BASE_DIR)/$(APP).app/Contents/MacOS/$(APP)
+	@if [ "$$(arch)" != arm64 ] ; \
+	then \
+		echo "You're machine is $$(arch) -- stripping all except arm64 is a bad idea" ; \
+		exit 1 ; \
+	fi
+	find "$(BASE_DIR)/$(APP).app" -type f | while read -r file; \
+	do \
+		if file "$$file" | grep -q "universal binary" ; \
+		then \
+			echo "Stripping x86_64 from: $$file" ; \
+			lipo -remove x86_64 -output "$$file.arm64" "$$file" && mv "$$file.arm64" "$$file" ; \
+		fi ; \
+	done
+
+%.dmg: %.app doc
+	hdiutil create -imagekey zlib-level=9 -volname $(APP) -ov -format UDZO \
+		-srcfolder $< $(foreach doc,$(BUNDLED_DOCS_HTML),-srcfolder $(doc)) \
+		$@
+
+dist/%.html: %.md doc/style.css
+	@mkdir -p "$$(dirname "$@")"
+	pandoc --standalone --embed-resources \
+		--css doc/style.css \
+		--resource-path doc \
+		--syntax-definition=doc/properties.xml \
+		-i $< -o $@
+
+doc:	$(BUNDLED_DOCS_HTML)
+
+dmg:	$(BASE_DIR)/$(APP).dmg
+	mv $< "$(BASE_DIR)/$(PKG)-$(VERSION)-macos-$$(arch).dmg"
+
+clean:
+	$(RM) -r "$(BASE_DIR)"
+
+# ------------------------------------------------------------------------------
+# This icon stuff is not needed now but it's left here for interest sake.
+%.icns:	%.png
+	@( \
+		z=1 ; \
+		T=$$(mktemp -d) ; \
+		trap '$(RM) -r $$T; exit $$z' 0 ; \
+		iconset=$$T/icon.iconset ; \
+		mkdir -p $$iconset ; \
+		for size in 16 32 64 128 256 512 ; \
+		do \
+			sips -z $$size $$size $< --out $$iconset/icon_$${size}x$${size}.png ; \
+			size2=$$(( $$size * 2 )) ; \
+			sips -z $$size2 $$size2 $< --out $$iconset/icon_$${size}x$${size}@2x.png ; \
+		done ; \
+		iconutil -c icns $$iconset ; \
+		mv $$T/icon.icns $@ ; \
+		z=0 ; \
+	)
+
+icons:
+	mkdir -p dist/icons
+	cp icons/*.png dist/icons
+	for f in dist/icons/*.png ; \
+	do \
+		$(MAKE) $${f%.png}.icns ; \
+	done
+
