@@ -9,10 +9,11 @@ The **lava GUI** is a standalone GUI client for
 [Flutter](https://flutter.dev/). It's fairly basic but surprisingly handy,
 particularly when working across multiple lava realms and AWS accounts.
 
-![GitHub Downloads (all assets, latest release)](https://img.shields.io/github/downloads/jin-gizmo/lava-gui/latest/total?sort=semver)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/jin-gizmo/lava-gui/total)
+![macOS](https://img.shields.io/badge/macOS-999999?logo=apple)
+![Windows](https://img.shields.io/badge/Windows-0078D6)
 ![GitHub Tag](https://img.shields.io/github/v/tag/jin-gizmo/lava-gui?filter=v*&label=version)
 [![GitHub Licence](https://img.shields.io/github/license/jin-gizmo/lava-gui)](https://github.com/jin-gizmo/lava-gui/blob/master/LICENCE.md)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/jin-gizmo/lava-gui/total)
 
 ![screen shot](doc/img/gui-snap-1.png)
 
